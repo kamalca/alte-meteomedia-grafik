@@ -357,23 +357,6 @@ function renderStationOptions(list) {
 }
 
 /* ===============================
-   Init
-   =============================== */
-document.getElementById("stationSearch").addEventListener("input", e => {
-  const q = e.target.value.trim().toLowerCase();
-
-  const filtered = allStations.filter(s =>
-    s.name.toLowerCase().includes(q) ||
-    s.id.includes(q)
-  );
-
-  renderStationOptions(filtered);
-});
-loadStation();
-loadStationList();
-setDarkmodeFromStorage();
-
-/* ===============================
    Chart.js Plugins
    =============================== */
 const gridPlugin={
@@ -458,7 +441,6 @@ const windArrowPlugin = {
 /* ===============================
    Render
    =============================== */
-let charts=[];
 function renderAll(d){
   charts.forEach(c=>c.destroy()); charts=[];
   const labels=d.times.map((_,i)=>i);
@@ -681,6 +663,24 @@ function setDarkmodeFromStorage() {
     }
   }
 }
+
+/* ===============================
+   Init
+   =============================== */
+let charts=[];
+document.getElementById("stationSearch").addEventListener("input", e => {
+  const q = e.target.value.trim().toLowerCase();
+
+  const filtered = allStations.filter(s =>
+    s.name.toLowerCase().includes(q) ||
+    s.id.includes(q)
+  );
+
+  renderStationOptions(filtered);
+});
+loadStation();
+loadStationList();
+setDarkmodeFromStorage();
 </script>
 
 </body>
