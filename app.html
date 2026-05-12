@@ -261,7 +261,13 @@ const WEATHERPRO_FIELDS = [
 
 function weatherProUrl(mgid) {
   const d = new Date();
-  const from = new Date(d.getFullYear(), d.getMonth(), d.getDate()).toISOString();
+  // CloudFront's cache key for /search includes `validFrom` but ignores
+  // `meteoGroupStationIds` (and our `_t` cache buster). Without per-request
+  // jitter on validFrom, every station ends up sharing whichever response
+  // CloudFront cached first. Adding a sub-second offset returns the same
+  // hourly forecast data but forces a fresh upstream fetch per station.
+  const jitterMs = Date.now() % 1000;
+  const from = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, jitterMs).toISOString();
   const until = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 3, 23, 59, 59).toISOString();
   return "https://point-forecast-weatherpro.meteogroup.com/search" +
          `?fields=${WEATHERPRO_FIELDS}` +
@@ -274,11 +280,13 @@ function weatherProUrl(mgid) {
 async function fetchWeatherProForecast(mgid) {
   const url = weatherProUrl(mgid);
   let token = await fetchWeatherProToken();
-  let resp = await fetch(url, { headers: { Authorization: "Bearer " + token } });
+  const init = { headers: { Authorization: "Bearer " + token }, cache: "no-store" };
+  let resp = await fetch(url, init);
   if (resp.status === 401 || resp.status === 403) {
     // Token may have expired — refetch once and retry.
     token = await fetchWeatherProToken(true);
-    resp = await fetch(url, { headers: { Authorization: "Bearer " + token } });
+    init.headers.Authorization = "Bearer " + token;
+    resp = await fetch(url, init);
   }
   if (!resp.ok) {
     throw new Error("WeatherPro antwortete mit HTTP " + resp.status);
