@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>DWD MOSMIX – Kompakt</title>
+<title>MeteoMedia - WeatherPro </title>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1"></script>
 
@@ -174,7 +174,7 @@ canvas {
 
 <div id="app">
   <div id="stationName">Station:</div>
-  <div id="metadata">Quelle: DWD MOSMIX via <a target="_blank" href="https://brightsky.dev/">brightsky.dev</a></div>
+  <div id="metadata">Quelle: <a target="_blank" href="https://www.weatherpro.com/">WeatherPro</a> / MeteoGroup</div>
 
   <div class="panel">
     <div class="panel-title" style="margin-bottom: -20px;">Temperatur °C</div>
@@ -215,22 +215,961 @@ canvas {
 <script>
 
 /* ===============================
-   URL Settings
+   WeatherPro auth + URL settings
    =============================== */
-function brightSkyUrl(stationId) {
+
+const WEATHERPRO_TOKEN_URL = "https://api.weatherpro.com/v1/token/weather";
+
+// Cached JWT for the current page load. Refetched lazily on first use and
+// after a 401/403 response from the forecast endpoint.
+let weatherProToken = null;
+let weatherProTokenPromise = null;
+
+function fetchWeatherProToken(force = false) {
+  if (force) {
+    weatherProToken = null;
+    weatherProTokenPromise = null;
+  }
+  if (weatherProToken) return Promise.resolve(weatherProToken);
+  if (weatherProTokenPromise) return weatherProTokenPromise;
+  weatherProTokenPromise = fetch(WEATHERPRO_TOKEN_URL)
+    .then(r => {
+      if (!r.ok) throw new Error("Token-Endpoint antwortete mit HTTP " + r.status);
+      return r.text();
+    })
+    .then(t => {
+      weatherProToken = t.trim();
+      return weatherProToken;
+    })
+    .catch(err => {
+      weatherProTokenPromise = null;
+      throw err;
+    });
+  return weatherProTokenPromise;
+}
+
+const WEATHERPRO_FIELDS = [
+  "meteoGroupStationName",
+  "airTemperatureInCelsius",
+  "windSpeedInKilometerPerHour",
+  "windDirectionInDegree",
+  "relativeHumidityInPercent",
+  "maxWindGustInKilometerPerHour",
+  "sunshineDurationInMinutes",
+  "precipitationAmountInMillimeter"
+].join(",");
+
+function weatherProUrl(mgid) {
   const d = new Date();
-  return `https://api.brightsky.dev/weather` +
-         `?wmo_station_id=${stationId}` +
-         `&date=${new Date(d.getFullYear(), d.getMonth(), d.getDate()).toISOString()}` +
-         `&last_date=${new Date(d.getFullYear(), d.getMonth(), d.getDate()+3,23,59,59).toISOString()}`;
+  const from = new Date(d.getFullYear(), d.getMonth(), d.getDate()).toISOString();
+  const until = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 3, 23, 59, 59).toISOString();
+  return "https://point-forecast-weatherpro.meteogroup.com/search" +
+         `?fields=${WEATHERPRO_FIELDS}` +
+         `&meteoGroupStationIds=${mgid}` +
+         `&validPeriod=PT0S,PT1H` +
+         `&validFrom=${from}` +
+         `&validUntil=${until}`;
 }
-//Mitte Deutschland + 500km für alle Stationen
-function brightSkySourcesUrl() {
-  return "https://api.brightsky.dev/sources" +
-    "?lat=50.55718952310392" +
-    "&lon=10.28123655125358" +
-    "&max_dist=500000";
+
+async function fetchWeatherProForecast(mgid) {
+  const url = weatherProUrl(mgid);
+  let token = await fetchWeatherProToken();
+  let resp = await fetch(url, { headers: { Authorization: "Bearer " + token } });
+  if (resp.status === 401 || resp.status === 403) {
+    // Token may have expired — refetch once and retry.
+    token = await fetchWeatherProToken(true);
+    resp = await fetch(url, { headers: { Authorization: "Bearer " + token } });
+  }
+  if (!resp.ok) {
+    throw new Error("WeatherPro antwortete mit HTTP " + resp.status);
+  }
+  return resp.json();
 }
+
+/* ===============================
+   Meteomedia station list
+   =============================== */
+
+const METEOMEDIA_STATIONS = [
+  { id: "105050", mgid: 10505, name: "Aachen-Orsbach" },
+  { id: "107481", mgid: 6510748, name: "Aalen-Stadtwerke" },
+  { id: "103090", mgid: 10309, name: "Ahaus" },
+  { id: "103121", mgid: 6510312, name: "Ahlen/Westfalen" },
+  { id: "108250", mgid: 6510836, name: "Albstadt" },
+  { id: "198635", mgid: 3110827, name: "Albstadt-Lautlingen" },
+  { id: "196780", mgid: 3110958, name: "Aldersbach-Kriestorf" },
+  { id: "104420", mgid: 10442, name: "Alfeld" },
+  { id: "190409", mgid: 3010317, name: "Alfhausen" },
+  { id: "192389", mgid: 3010544, name: "Alsfeld-Eifa" },
+  { id: "102710", mgid: 10271, name: "Alt Ruppin" },
+  { id: "104970", mgid: 6510496, name: "Altdöbern" },
+  { id: "105810", mgid: 6510581, name: "Altenberg/Erzgebirge" },
+  { id: "105660", mgid: 6510566, name: "Altenburg/Thüringen" },
+  { id: "109540", mgid: 10954, name: "Altenstadt" },
+  { id: "108320", mgid: 6510840, name: "Altensteig/Württemberg" },
+  { id: "193899", mgid: 3010483, name: "Altgeringswalde" },
+  { id: "198639", mgid: 3110834, name: "Altheim, Kreis Biberach" },
+  { id: "196474", mgid: 3010958, name: "Altomünster-Maisbrunn" },
+  { id: "191749", mgid: 3010643, name: "Alzey" },
+  { id: "195339", mgid: 3010795, name: "Amberg-Unterammersricht" },
+  { id: "102470", mgid: 6510247, name: "Amelinghausen" },
+  { id: "197415", mgid: 3110982, name: "Amerang-Pfaffing" },
+  { id: "100170", mgid: 6510017, name: "Amrum" },
+  { id: "109660", mgid: 6510966, name: "Andechs-Kloster" },
+  { id: "105200", mgid: 10520, name: "Andernach" },
+  { id: "102910", mgid: 10291, name: "Angermünde" },
+  { id: "190229", mgid: 3010193, name: "Anklam" },
+  { id: "107530", mgid: 6510753, name: "Ansbach" },
+  { id: "109440", mgid: 6510950, name: "Argenbühl/Allgäu" },
+  { id: "106560", mgid: 6510656, name: "Arnstein" },
+  { id: "194399", mgid: 3010756, name: "Arnstein-Müdesheim" },
+  { id: "104600", mgid: 10460, name: "Artern" },
+  { id: "197209", mgid: 3010961, name: "Attenkam" },
+  { id: "193938", mgid: 3110575, name: "Aue" },
+  { id: "108520", mgid: 10852, name: "Augsburg" },
+  { id: "102051", mgid: 6510205, name: "Aurich" },
+  { id: "191949", mgid: 3010747, name: "Bad Bergzabern" },
+  { id: "104271", mgid: 6310427, name: "Bad Berleburg-Hemschlar" },
+  { id: "191089", mgid: 3010296, name: "Bad Berleburg-Stünzel" },
+  { id: "106890", mgid: 6510689, name: "Bad Brambach-Kurpark" },
+  { id: "106900", mgid: 6510690, name: "Bad Brambach-Mineralquellen" },
+  { id: "106670", mgid: 6510667, name: "Bad Colberg" },
+  { id: "191869", mgid: 3010742, name: "Bad Dürkheim" },
+  { id: "107210", mgid: 6510721, name: "Bad Dürkheim (MG)" },
+  { id: "109130", mgid: 6510917, name: "Bad Dürrheim-Öfingen" },
+  { id: "106910", mgid: 6510691, name: "Bad Elster" },
+  { id: "193979", mgid: 3010589, name: "Bad Elster II" },
+  { id: "108951", mgid: 6510895, name: "Bad Griesbach - A. Hartl Resort" },
+  { id: "190493", mgid: 3110469, name: "Bad Harzburg" },
+  { id: "105420", mgid: 10542, name: "Bad Hersfeld" },
+  { id: "106580", mgid: 10658, name: "Bad Kissingen" },
+  { id: "197699", mgid: 3110965, name: "Bad Kohlgrub (Rosshof)" },
+  { id: "194049", mgid: 3010671, name: "Bad Königshofen" },
+  { id: "191679", mgid: 3010635, name: "Bad Kreuznach" },
+  { id: "104480", mgid: 6510449, name: "Bad Lauterberg" },
+  { id: "104820", mgid: 6510482, name: "Bad Liebenwerda" },
+  { id: "104300", mgid: 10430, name: "Bad Lippspringe" },
+  { id: "193409", mgid: 3010579, name: "Bad Lobenstein" },
+  { id: "105260", mgid: 10526, name: "Bad Marienberg" },
+  { id: "198149", mgid: 3010824, name: "Bad Mergentheim-Neunkirchen" },
+  { id: "104890", mgid: 3010494, name: "Bad Muskau" },
+  { id: "192559", mgid: 3010556, name: "Bad Nauheim" },
+  { id: "191329", mgid: 3010518, name: "Bad Neuenahr-Ahrweiler" },
+  { id: "103330", mgid: 6510333, name: "Bad Pyrmont" },
+  { id: "103250", mgid: 10325, name: "Bad Salzuflen" },
+  { id: "105481", mgid: 6510548, name: "Bad Salzungen" },
+  { id: "108330", mgid: 6510841, name: "Bad Teinach-Zavelstein" },
+  { id: "109410", mgid: 6510945, name: "Bad Waldsee" },
+  { id: "109500", mgid: 6510953, name: "Bad Wörishofen" },
+  { id: "108060", mgid: 6510810, name: "Baden-Baden Brenner's Parkhotel" },
+  { id: "198369", mgid: 3010801, name: "Baden-Baden-Geroldsau" },
+  { id: "108200", mgid: 6510827, name: "Baiersbronn" },
+  { id: "109431", mgid: 6310943, name: "Balderschwang (MG)" },
+  { id: "198633", mgid: 3110819, name: "Balingen-Bronnhaupten" },
+  { id: "108241", mgid: 6510835, name: "Balingen-Heselwangen" },
+  { id: "101140", mgid: 6510114, name: "Baltrum" },
+  { id: "106750", mgid: 10675, name: "Bamberg" },
+  { id: "103630", mgid: 6510363, name: "Barleben" },
+  { id: "190449", mgid: 3010336, name: "Barsinghausen-Hohenbostel" },
+  { id: "101800", mgid: 10180, name: "Barth" },
+  { id: "103760", mgid: 10376, name: "Baruth" },
+  { id: "105060", mgid: 10506, name: "Barweiler" },
+  { id: "190379", mgid: 3010225, name: "Bassum" },
+  { id: "105470", mgid: 6510547, name: "Bebra" },
+  { id: "192909", mgid: 3010662, name: "Beerfelden" },
+  { id: "109020", mgid: 6510903, name: "Belchen/Schwarzwald" },
+  { id: "103120", mgid: 10312, name: "Belm" },
+  { id: "109670", mgid: 6510967, name: "Benediktbeuern-Kloster" },
+  { id: "101160", mgid: 6510116, name: "Bensersiel" },
+  { id: "190709", mgid: 3010371, name: "Berge" },
+  { id: "105270", mgid: 6510528, name: "Bergisch Gladbach" },
+  { id: "103870", mgid: 6510387, name: "Berlin-Adlershof" },
+  { id: "103880", mgid: 3010390, name: "Berlin-Buch" },
+  { id: "103810", mgid: 10381, name: "Berlin-Dahlem" },
+  { id: "103800", mgid: 6510380, name: "Berlin-Eiskeller" },
+  { id: "103940", mgid: 6510394, name: "Berlin-Insulaner/Sternwarte" },
+  { id: "190889", mgid: 3010386, name: "Berlin-Kaniswall" },
+  { id: "103780", mgid: 6510378, name: "Berlin-Kreuzberg" },
+  { id: "190888", mgid: 3010387, name: "Berlin-Marzahn" },
+  { id: "103910", mgid: 6510391, name: "Berlin-Müggelsee" },
+  { id: "103840", mgid: 10384, name: "Berlin-Tempelhof" },
+  { id: "103900", mgid: 6510390, name: "Berlin-Wannsee" },
+  { id: "193629", mgid: 3010468, name: "Bernburg-Strenzfeld" },
+  { id: "103180", mgid: 6510318, name: "Bersenbrück" },
+  { id: "193909", mgid: 3010487, name: "Bertsdorf-Hörnitz" },
+  { id: "107040", mgid: 10704, name: "Berus/Saarland" },
+  { id: "103750", mgid: 6510375, name: "Bestensee" },
+  { id: "190468", mgid: 3010432, name: "Bevern" },
+  { id: "104340", mgid: 6510437, name: "Beverungen-Drenke" },
+  { id: "104310", mgid: 6510434, name: "Beverungen/Weser" },
+  { id: "103270", mgid: 6510327, name: "Bielefeld" },
+  { id: "190927", mgid: 3010314, name: "Bielefeld-Deppendorf" },
+  { id: "193304", mgid: 3110546, name: "Birx/Rhön" },
+  { id: "191609", mgid: 3010622, name: "Blankenrath" },
+  { id: "104061", mgid: 6310406, name: "Bocholt" },
+  { id: "190994", mgid: 3110410, name: "Bochum" },
+  { id: "104110", mgid: 6510414, name: "Bochum-Sundern" },
+  { id: "102490", mgid: 10249, name: "Boizenburg" },
+  { id: "101610", mgid: 10161, name: "Boltenhagen" },
+  { id: "105170", mgid: 6510518, name: "Bonn-Rüngsdorf" },
+  { id: "190989", mgid: 3010313, name: "Borken (Westfalen)" },
+  { id: "101100", mgid: 6510110, name: "Borkum" },
+  { id: "190276", mgid: 3010114, name: "Borkum-Flugplatz" },
+  { id: "107120", mgid: 6510712, name: "Bostalsee" },
+  { id: "103710", mgid: 6510371, name: "Brandenburg an der Havel" },
+  { id: "106110", mgid: 6510611, name: "Brauneberg-Juffer" },
+  { id: "106120", mgid: 6510612, name: "Brauneberg/Mosel" },
+  { id: "104520", mgid: 10452, name: "Braunlage" },
+  { id: "104521", mgid: 6510452, name: "Braunlage-Wurmberg" },
+  { id: "103480", mgid: 10348, name: "Braunschweig" },
+  { id: "103470", mgid: 6510347, name: "Braunschweig-Flughafen" },
+  { id: "102240", mgid: 10224, name: "Bremen-Flughafen" },
+  { id: "101290", mgid: 10129, name: "Bremerhaven" },
+  { id: "101330", mgid: 6510133, name: "Bremerhaven (MG)" },
+  { id: "101390", mgid: 10139, name: "Bremervörde" },
+  { id: "107190", mgid: 6510718, name: "Bretten" },
+  { id: "191049", mgid: 3010436, name: "Brilon-Thülen" },
+  { id: "104530", mgid: 10453, name: "Brocken" },
+  { id: "100420", mgid: 10042, name: "Brodersby-Schoenhagen" },
+  { id: "106130", mgid: 10613, name: "Büchel" },
+  { id: "198109", mgid: 3110648, name: "Buchen (Odenwald)" },
+  { id: "198669", mgid: 3110908, name: "Buchenbach" },
+  { id: "103350", mgid: 10335, name: "Bückeburg" },
+  { id: "103830", mgid: 6510383, name: "Buckow/Märkische Schweiz" },
+  { id: "103281", mgid: 6510331, name: "Bünde" },
+  { id: "104250", mgid: 6510429, name: "Büren-Ahden/Flughafen PAD" },
+  { id: "192169", mgid: 3010285, name: "Burgwald-Bottendorf" },
+  { id: "100300", mgid: 6510030, name: "Büsum" },
+  { id: "101281", mgid: 6510128, name: "Butjadingen" },
+  { id: "101440", mgid: 6510144, name: "Buxtehude" },
+  { id: "105740", mgid: 10574, name: "Carlsfeld" },
+  { id: "104140", mgid: 6510419, name: "Castrop-Rauxel" },
+  { id: "103430", mgid: 10343, name: "Celle" },
+  { id: "105770", mgid: 10577, name: "Chemnitz" },
+  { id: "109820", mgid: 10982, name: "Chieming" },
+  { id: "106700", mgid: 6510670, name: "Coburg (MG)" },
+  { id: "192279", mgid: 3010288, name: "Cölbe" },
+  { id: "190769", mgid: 3010496, name: "Coschen" },
+  { id: "104960", mgid: 10496, name: "Cottbus" },
+  { id: "101310", mgid: 10131, name: "Cuxhaven" },
+  { id: "193029", mgid: 3010554, name: "Dachwig" },
+  { id: "104770", mgid: 6510477, name: "Dahme-Technikhandel Kreißler" },
+  { id: "101540", mgid: 6510154, name: "Dahme/Ostsee" },
+  { id: "192809", mgid: 3010674, name: "Darmstadt II" },
+  { id: "100800", mgid: 6510080, name: "Darßer Ort" },
+  { id: "102220", mgid: 6510222, name: "Delmenhorst" },
+  { id: "193509", mgid: 3010365, name: "Demker" },
+  { id: "101870", mgid: 6510187, name: "Demmin" },
+  { id: "104741", mgid: 6510474, name: "Dessau-Flugplatz 'Hugo Junkers'" },
+  { id: "106150", mgid: 10615, name: "Deuselbach" },
+  { id: "193936", mgid: 3010585, name: "Deutschneudorf-Brüderwiese" },
+  { id: "103210", mgid: 10321, name: "Diepholz" },
+  { id: "106161", mgid: 6510616, name: "Dill/Hunsrück" },
+  { id: "192329", mgid: 3010533, name: "Dillenburg" },
+  { id: "196339", mgid: 3110844, name: "Dillingen/Donau-Fristingen" },
+  { id: "107030", mgid: 6510704, name: "Dillingen/Saar" },
+  { id: "108722", mgid: 6510872, name: "Dingolfing" },
+  { id: "193929", mgid: 3010582, name: "Dippoldiswalde-Reinberg" },
+  { id: "104900", mgid: 10490, name: "Doberlug-Kirchhain" },
+  { id: "108260", mgid: 6510837, name: "Doline Degerfeld" },
+  { id: "196019", mgid: 3010874, name: "Donauwörth-Osterweiler" },
+  { id: "101500", mgid: 10150, name: "Dörnick" },
+  { id: "108160", mgid: 6510823, name: "Dornstetten" },
+  { id: "190376", mgid: 3010240, name: "Dörpen" },
+  { id: "104170", mgid: 6510423, name: "Dortmund- Technische Universität" },
+  { id: "104880", mgid: 10488, name: "Dresden-Flughafen" },
+  { id: "104870", mgid: 3010489, name: "Dresden-Hosterwitz" },
+  { id: "104881", mgid: 6510480, name: "Dresden-Rossendorf" },
+  { id: "193869", mgid: 3010485, name: "Dresden-Strehlen" },
+  { id: "193529", mgid: 3010366, name: "Drewitz (bei Burg)" },
+  { id: "190990", mgid: 3110419, name: "Duisburg-Baerl" },
+  { id: "108041", mgid: 6410804, name: "Durbach" },
+  { id: "104000", mgid: 10400, name: "Düsseldorf-Flughafen" },
+  { id: "104002", mgid: 6510443, name: "Düsseldorf-Messe" },
+  { id: "104001", mgid: 6510401, name: "Düsseldorf-Uni" },
+  { id: "105930", mgid: 6510593, name: "Ebersbach-Neugersdorf" },
+  { id: "197039", mgid: 3110869, name: "Ebersberg-Halbing" },
+  { id: "194479", mgid: 3010763, name: "Ebrach" },
+  { id: "196059", mgid: 3010846, name: "Eichstätt-Landershofen" },
+  { id: "105400", mgid: 10540, name: "Eisenach" },
+  { id: "104620", mgid: 6510461, name: "Eisleben-Reifen Ziegler" },
+  { id: "198329", mgid: 3010930, name: "Ellwangen-Rindelbach" },
+  { id: "101491", mgid: 6510149, name: "Elmshorn-Stadtwerke" },
+  { id: "101300", mgid: 10130, name: "Elpersbüttel" },
+  { id: "196119", mgid: 3010887, name: "Elsendorf-Horneck" },
+  { id: "106311", mgid: 6510631, name: "Eltville a. Rhein-Kloster Eberbach" },
+  { id: "198589", mgid: 3010908, name: "Elzach-Fisnacht" },
+  { id: "198569", mgid: 3010903, name: "Emmendingen-Mundingen" },
+  { id: "104041", mgid: 6510406, name: "Emmerich-Elten" },
+  { id: "103160", mgid: 6510314, name: "Emsdetten" },
+  { id: "109040", mgid: 6510904, name: "Endenburg/Schwarzwald" },
+  { id: "190939", mgid: 3010320, name: "Ennigerloh-Ostenfelde" },
+  { id: "105830", mgid: 6510583, name: "Eppendorf" },
+  { id: "198209", mgid: 3010816, name: "Eppingen-Elsenz" },
+  { id: "106170", mgid: 6510617, name: "Erbeskopf/Hunsrück" },
+  { id: "190049", mgid: 3010038, name: "Erfde" },
+  { id: "105540", mgid: 10554, name: "Erfurt-Flughafen" },
+  { id: "104031", mgid: 6510405, name: "Erkelenz" },
+  { id: "107890", mgid: 6510789, name: "Eschlkam" },
+  { id: "192249", mgid: 3010460, name: "Eschwege" },
+  { id: "105030", mgid: 6510503, name: "Eschweiler" },
+  { id: "191029", mgid: 3010434, name: "Eslohe" },
+  { id: "104100", mgid: 10410, name: "Essen" },
+  { id: "107381", mgid: 6510739, name: "Esslingen am Neckar" },
+  { id: "106200", mgid: 6510620, name: "Eßweiler" },
+  { id: "108000", mgid: 6510801, name: "Europapark Rust" },
+  { id: "196739", mgid: 3010979, name: "Falkenberg" },
+  { id: "102460", mgid: 10246, name: "Fassberg" },
+  { id: "100550", mgid: 10055, name: "Fehmarn-Westermarkelsdorf" },
+  { id: "109080", mgid: 10908, name: "Feldberg im Schwarzwald" },
+  { id: "102820", mgid: 10282, name: "Feldberg/Mecklenburg" },
+  { id: "106350", mgid: 10635, name: "Feldberg/Taunus" },
+  { id: "107401", mgid: 6410740, name: "Fellbach" },
+  { id: "107560", mgid: 10756, name: "Feuchtwangen-Heilbronn" },
+  { id: "105780", mgid: 10578, name: "Fichtelberg" },
+  { id: "194619", mgid: 3010699, name: "Fichtelberg/Ofr.-Hüttstadl" },
+  { id: "109550", mgid: 6510958, name: "Fischen/Allgäu" },
+  { id: "105380", mgid: 6510538, name: "Frankenberg/Eder" },
+  { id: "192755", mgid: 3110656, name: "Frankfurt-Westend" },
+  { id: "106370", mgid: 10637, name: "Frankfurt/Flughafen" },
+  { id: "190309", mgid: 3010133, name: "Freiburg (Elbe)" },
+  { id: "108030", mgid: 10803, name: "Freiburg im Breisgau" },
+  { id: "108040", mgid: 6510807, name: "Freiburg-Ebnet" },
+  { id: "107070", mgid: 6510707, name: "Freisener Höhe" },
+  { id: "198139", mgid: 3110646, name: "Freudenberg/Main-Boxtal" },
+  { id: "108150", mgid: 10815, name: "Freudenstadt" },
+  { id: "108140", mgid: 10814, name: "Freudenstadt-Langenwald" },
+  { id: "108190", mgid: 6510825, name: "Freudenstadt-Marktplatz" },
+  { id: "195321", mgid: 3010792, name: "Freystadt-Oberndorf" },
+  { id: "109360", mgid: 6510940, name: "Friedrichshafen (MG)" },
+  { id: "198789", mgid: 3110937, name: "Friedrichshafen-Unterraderach" },
+  { id: "107041", mgid: 6410704, name: "Friedrichweiler" },
+  { id: "102100", mgid: 10210, name: "Friesoythe-Altenoythe" },
+  { id: "104390", mgid: 10439, name: "Fritzlar" },
+  { id: "104370", mgid: 6510439, name: "Fritzlar-Lohne Reifen Klein" },
+  { id: "104161", mgid: 6510444, name: "Fröndenberg-Mitte" },
+  { id: "105360", mgid: 6510536, name: "Fulda" },
+  { id: "108950", mgid: 10895, name: "Fürstenzell" },
+  { id: "107620", mgid: 6510762, name: "Fürth" },
+  { id: "109250", mgid: 6510931, name: "Gaienhofen" },
+  { id: "103590", mgid: 10359, name: "Gardelegen" },
+  { id: "109630", mgid: 10963, name: "Garmisch-Partenkirchen" },
+  { id: "109640", mgid: 6510964, name: "Garmisch-Partenkirchen (MG)" },
+  { id: "193839", mgid: 3010486, name: "Garsebach b. Meissen" },
+  { id: "101451", mgid: 6510147, name: "Geesthacht" },
+  { id: "105000", mgid: 10500, name: "Geilenkirchen" },
+  { id: "106280", mgid: 10628, name: "Geisenheim" },
+  { id: "198678", mgid: 3110903, name: "Geisingen" },
+  { id: "107770", mgid: 10777, name: "Gelbelsee" },
+  { id: "190969", mgid: 3010406, name: "Geldern-Walbeck" },
+  { id: "104130", mgid: 6510417, name: "Gelsenkirchen-Westfälische Hochschule" },
+  { id: "103650", mgid: 10365, name: "Genthin" },
+  { id: "105670", mgid: 10567, name: "Gera" },
+  { id: "108061", mgid: 6510811, name: "Gernsbach-Kaltenbronn" },
+  { id: "109100", mgid: 6510912, name: "Gersbach/Schwarzwald" },
+  { id: "191014", mgid: 3110403, name: "Gevelsberg-Oberbröking" },
+  { id: "105320", mgid: 10532, name: "Gießen" },
+  { id: "192289", mgid: 3010297, name: "Gilserberg-Moischeid" },
+  { id: "100330", mgid: 10033, name: "Glücksburg-Meierwik" },
+  { id: "101000", mgid: 6510100, name: "Göhren/Rügen" },
+  { id: "101680", mgid: 10168, name: "Goldberg" },
+  { id: "194859", mgid: 3010772, name: "Gollhofen" },
+  { id: "104990", mgid: 10499, name: "Görlitz-Flugplatz" },
+  { id: "105510", mgid: 6510551, name: "Gotha-Stadtwerke" },
+  { id: "108720", mgid: 10872, name: "Gottfrieding" },
+  { id: "104440", mgid: 10444, name: "Göttingen" },
+  { id: "104450", mgid: 6510445, name: "Göttingen (DTN)" },
+  { id: "190262", mgid: 3010167, name: "Grabow (Kläranlage Fahlenkamp)" },
+  { id: "194939", mgid: 3110681, name: "Gräfenberg-Kasberg" },
+  { id: "196299", mgid: 3010994, name: "Grainet-Rehberg" },
+  { id: "190109", mgid: 3010249, name: "Grambek" },
+  { id: "190589", mgid: 3010290, name: "Grambow-Schwennenz" },
+  { id: "102010", mgid: 6510201, name: "Greetsiel" },
+  { id: "101840", mgid: 10184, name: "Greifswald" },
+  { id: "100970", mgid: 10097, name: "Greifswalder Oie" },
+  { id: "100990", mgid: 6510099, name: "Greifswalder Oie/Leuchtturm" },
+  { id: "105680", mgid: 6510568, name: "Greiz" },
+  { id: "105090", mgid: 6510512, name: "Grevenbroich" },
+  { id: "190395", mgid: 3010305, name: "Groß Berßen" },
+  { id: "190209", mgid: 3010172, name: "Groß Lüsewitz" },
+  { id: "101600", mgid: 6510160, name: "Groß Schwansee" },
+  { id: "102180", mgid: 6510218, name: "Großenkneten" },
+  { id: "190377", mgid: 3010226, name: "Großenkneten II" },
+  { id: "107910", mgid: 10791, name: "Großer Arber" },
+  { id: "108961", mgid: 6510896, name: "Großer Falkenstein" },
+  { id: "198269", mgid: 3110747, name: "Großerlach-Mannenweiler" },
+  { id: "109690", mgid: 6510969, name: "Grosshartpenning" },
+  { id: "192677", mgid: 3110651, name: "Gründau-Breitenborn" },
+  { id: "102890", mgid: 10289, name: "Grünow" },
+  { id: "108611", mgid: 6510861, name: "Grünwald-Bavaria Filmstadt" },
+  { id: "103410", mgid: 6510341, name: "Gut Sunder" },
+  { id: "104910", mgid: 6510491, name: "Guteborn/Lausitz" },
+  { id: "106160", mgid: 10616, name: "Hahn/Hunsrück" },
+  { id: "108990", mgid: 6510899, name: "Haidmühle" },
+  { id: "104860", mgid: 6510487, name: "Hainichen" },
+  { id: "103580", mgid: 6510358, name: "Haldensleben" },
+  { id: "104650", mgid: 6510465, name: "Halle-Trotha" },
+  { id: "103290", mgid: 6510329, name: "Halle/Westfalen" },
+  { id: "103420", mgid: 6510342, name: "Hambühren-Ovelgönne" },
+  { id: "101470", mgid: 10147, name: "Hamburg-Flughafen" },
+  { id: "190269", mgid: 3010149, name: "Hamburg-Neuwiedenthal" },
+  { id: "101450", mgid: 6510145, name: "Hamburg-Veddel" },
+  { id: "190429", mgid: 3010335, name: "Hameln-Hastenbeck" },
+  { id: "103380", mgid: 10338, name: "Hannover-Flughafen" },
+  { id: "103390", mgid: 6510339, name: "Hannover-Messe" },
+  { id: "108500", mgid: 10850, name: "Harburg (Schwaben)" },
+  { id: "105850", mgid: 6510585, name: "Hartha-Tharandt" },
+  { id: "104580", mgid: 10458, name: "Harzgerode" },
+  { id: "190039", mgid: 3010034, name: "Hattstedt" },
+  { id: "105120", mgid: 6510515, name: "Hatzenport/Mosel" },
+  { id: "103110", mgid: 6510311, name: "Havixbeck-Tilbeck" },
+  { id: "198529", mgid: 3010919, name: "Hechingen" },
+  { id: "190766", mgid: 3010391, name: "Heckelberg" },
+  { id: "107320", mgid: 6510732, name: "Heidelberg-Universität" },
+  { id: "108401", mgid: 6510844, name: "Heidenheim/Brenz" },
+  { id: "104470", mgid: 6510447, name: "Heilbad Heiligenstadt" },
+  { id: "107370", mgid: 6510738, name: "Heilbronn" },
+  { id: "107440", mgid: 6510744, name: "Heilbronn-Wartberg" },
+  { id: "101630", mgid: 6510163, name: "Heiligendamm" },
+  { id: "105230", mgid: 6510523, name: "Heimbach/Eifel" },
+  { id: "194599", mgid: 3010697, name: "Heinersreuth-Vollhof" },
+  { id: "191069", mgid: 3010500, name: "Heinsberg-Schleiden" },
+  { id: "109010", mgid: 6510902, name: "Heitersheim-Jürgen Ehret" },
+  { id: "100140", mgid: 6510014, name: "Helgoland-Oberland" },
+  { id: "100150", mgid: 10015, name: "Helgoland-Südhafen" },
+  { id: "190471", mgid: 3010346, name: "Helmstedt-Emmerstedt" },
+  { id: "104120", mgid: 6510415, name: "Hemer" },
+  { id: "103801", mgid: 6310380, name: "Hennigsdorf-Nord" },
+  { id: "198429", mgid: 3010926, name: "Hermaringen-Allewind" },
+  { id: "105630", mgid: 6510563, name: "Hermsdorf/Thüringen" },
+  { id: "108230", mgid: 6510833, name: "Herrenberg" },
+  { id: "107631", mgid: 6510763, name: "Hersbruck" },
+  { id: "190494", mgid: 3110355, name: "Herzberg am Harz" },
+  { id: "104611", mgid: 6510460, name: "Hettstedt-Kolping-Berufsbildungswerk" },
+  { id: "100850", mgid: 6510085, name: "Hiddensee-Dornbusch" },
+  { id: "100860", mgid: 6510086, name: "Hiddensee-Dünenheide" },
+  { id: "190129", mgid: 3010091, name: "Hiddensee-Vitte" },
+  { id: "191289", mgid: 3010527, name: "Hilgenroth" },
+  { id: "107140", mgid: 6510713, name: "Hilst" },
+  { id: "109140", mgid: 6510918, name: "Höchenschwand" },
+  { id: "105940", mgid: 6510594, name: "Hochwald" },
+  { id: "106850", mgid: 10685, name: "Hof" },
+  { id: "109620", mgid: 10962, name: "Hohenpeißenberg" },
+  { id: "108350", mgid: 6510842, name: "Hohenstadt/Schwäbische Alb" },
+  { id: "109240", mgid: 6510930, name: "Hohentwiel" },
+  { id: "105340", mgid: 10534, name: "Hoherodskopf/Vogelsberg" },
+  { id: "100380", mgid: 10038, name: "Hohn" },
+  { id: "190089", mgid: 3010151, name: "Hohwacht" },
+  { id: "104760", mgid: 10476, name: "Holzdorf" },
+  { id: "197359", mgid: 3110980, name: "Holzkirchen" },
+  { id: "109680", mgid: 6510968, name: "Holzkirchen MG" },
+  { id: "104412", mgid: 6310442, name: "Holzminden-Silberborn" },
+  { id: "101180", mgid: 6510118, name: "Hooksiel" },
+  { id: "109510", mgid: 6510955, name: "Hopferau/Allgäu" },
+  { id: "108100", mgid: 6510818, name: "Hornisgrinde" },
+  { id: "198361", mgid: 3110810, name: "Hornisgrinde (DWD)" },
+  { id: "100230", mgid: 6510023, name: "Hörnum/Sylt" },
+  { id: "101250", mgid: 6510125, name: "Horumersiel/Wangerland" },
+  { id: "104411", mgid: 6510441, name: "Höxter" },
+  { id: "104950", mgid: 10495, name: "Hoyerswerda" },
+  { id: "191339", mgid: 3010515, name: "Hümmerich" },
+  { id: "100260", mgid: 6510026, name: "Husum" },
+  { id: "106180", mgid: 10618, name: "Idar-Oberstein" },
+  { id: "108010", mgid: 6510802, name: "Ihringen" },
+  { id: "104550", mgid: 6510454, name: "Ilsenburg" },
+  { id: "198189", mgid: 3110742, name: "Ingelfingen-Stachenhausen" },
+  { id: "108600", mgid: 10860, name: "Ingolstadt (Flugplatz)" },
+  { id: "104070", mgid: 6510410, name: "Issum" },
+  { id: "101420", mgid: 10142, name: "Itzehoe-Flugplatz" },
+  { id: "109270", mgid: 6510933, name: "Iznang-Mole" },
+  { id: "193149", mgid: 3010557, name: "Jena (Sternwarte)" },
+  { id: "104750", mgid: 6510475, name: "Jessen/Elster" },
+  { id: "193659", mgid: 3110474, name: "Jeßnitz" },
+  { id: "109200", mgid: 6510926, name: "Jestetten" },
+  { id: "101121", mgid: 6510112, name: "Juist-Flugplatz" },
+  { id: "100920", mgid: 6510092, name: "Juliusruh/Rügen" },
+  { id: "104840", mgid: 6510484, name: "Kabelsketal" },
+  { id: "194309", mgid: 3010752, name: "Kahl/Main" },
+  { id: "104270", mgid: 10427, name: "Kahler Asten" },
+  { id: "107470", mgid: 10747, name: "Kaisersbach-Cronhütte" },
+  { id: "191859", mgid: 3010539, name: "Kaiserslautern" },
+  { id: "191169", mgid: 3010507, name: "Kall-Sistig" },
+  { id: "105460", mgid: 6510546, name: "Kaltennordheim" },
+  { id: "105080", mgid: 6510510, name: "Kalterherberg" },
+  { id: "100910", mgid: 10091, name: "Kap Arkona (Rügen)" },
+  { id: "190219", mgid: 3010097, name: "Karlshagen" },
+  { id: "107260", mgid: 6510727, name: "Karlsruhe" },
+  { id: "104361", mgid: 6510535, name: "Kassel" },
+  { id: "104360", mgid: 10436, name: "Kassel-Calden" },
+  { id: "105560", mgid: 6510556, name: "Katzhütte" },
+  { id: "197229", mgid: 3010953, name: "Kaufbeuren-Oberbeuren" },
+  { id: "109460", mgid: 10946, name: "Kempten" },
+  { id: "197910", mgid: 3110960, name: "Kiefersfelden-Gach" },
+  { id: "100460", mgid: 10047, name: "Kiel-Holtenau" },
+  { id: "100440", mgid: 10044, name: "Kiel/Leuchtturm" },
+  { id: "198234", mgid: 3110746, name: "Kirchberg/Jagst-Herboldshausen" },
+  { id: "190189", mgid: 3010161, name: "Kirchdorf (Insel Poel)" },
+  { id: "107090", mgid: 6510709, name: "Kirkel" },
+  { id: "107150", mgid: 6510715, name: "Kirrberg" },
+  { id: "194809", mgid: 3010769, name: "Kitzingen" },
+  { id: "193199", mgid: 3010564, name: "Kleiner Inselsberg" },
+  { id: "190849", mgid: 3010493, name: "Klettwitz" },
+  { id: "104020", mgid: 3010404, name: "Kleve" },
+  { id: "108900", mgid: 6510890, name: "Klingenbrunn-Bahnhof" },
+  { id: "102660", mgid: 6510266, name: "Klink/Müritz" },
+  { id: "108180", mgid: 10818, name: "Klippeneck" },
+  { id: "193789", mgid: 3010480, name: "Klitzschen (Mockrehna)" },
+  { id: "105110", mgid: 6510514, name: "Köln-City" },
+  { id: "105290", mgid: 6510529, name: "Köln-Porz-Wahn-Reifen Johann" },
+  { id: "191093", mgid: 3110513, name: "Köln-Stammheim" },
+  { id: "105130", mgid: 10513, name: "Köln/Bonn-Flughafen" },
+  { id: "108170", mgid: 6510824, name: "Königsfeld im Schwarzwald" },
+  { id: "104560", mgid: 6510456, name: "Königshütte/Harz" },
+  { id: "105190", mgid: 10519, name: "Königswinter-Heiderhof" },
+  { id: "109290", mgid: 10929, name: "Konstanz" },
+  { id: "109320", mgid: 6510937, name: "Konstanz-Dettingen" },
+  { id: "109280", mgid: 6510934, name: "Konstanz-Südkurier" },
+  { id: "196069", mgid: 3010844, name: "Kösching" },
+  { id: "193709", mgid: 3010473, name: "Köthen (Anhalt) II" },
+  { id: "104850", mgid: 6510485, name: "Köthen/Anhalt" },
+  { id: "193745", mgid: 3110464, name: "Kreipitzsch bei Bad Kösen" },
+  { id: "109370", mgid: 6510941, name: "Kressbronn/Bodensee" },
+  { id: "106730", mgid: 3010681, name: "Kronach" },
+  { id: "109160", mgid: 6510922, name: "Krunkelbachhütte" },
+  { id: "193849", mgid: 3010498, name: "Kubschütz" },
+  { id: "107710", mgid: 10771, name: "Kümmersbruck" },
+  { id: "102670", mgid: 10267, name: "Kyritz" },
+  { id: "101720", mgid: 10172, name: "Laage" },
+  { id: "107250", mgid: 6510725, name: "Ladenburg" },
+  { id: "108050", mgid: 10805, name: "Lahr" },
+  { id: "107900", mgid: 6510790, name: "Lalling" },
+  { id: "102650", mgid: 6510265, name: "Land Fleesensee" },
+  { id: "108570", mgid: 10857, name: "Landsberg/Lech" },
+  { id: "196481", mgid: 3110943, name: "Landshut-Reithof" },
+  { id: "104400", mgid: 6510440, name: "Landwehrhagen" },
+  { id: "106390", mgid: 10639, name: "Langen" },
+  { id: "190789", mgid: 3010476, name: "Langenlipsdorf" },
+  { id: "193299", mgid: 3110568, name: "Langenwetzendorf-Göttendorf" },
+  { id: "101150", mgid: 6510115, name: "Langeoog" },
+  { id: "109461", mgid: 6510961, name: "Lauben/Oberallgäu" },
+  { id: "108370", mgid: 10837, name: "Laupheim" },
+  { id: "108560", mgid: 10856, name: "Lechfeld" },
+  { id: "100220", mgid: 10022, name: "Leck" },
+  { id: "104490", mgid: 10449, name: "Leinefelde" },
+  { id: "104710", mgid: 10471, name: "Leipzig-City" },
+  { id: "104690", mgid: 10469, name: "Leipzig-Flughafen" },
+  { id: "104700", mgid: 6510470, name: "Leipzig-Stadtwerke" },
+  { id: "105251", mgid: 6510527, name: "Lennestadt-Sauerland Pyramiden" },
+  { id: "191084", mgid: 3110438, name: "Lennestadt-Theten" },
+  { id: "190529", mgid: 3010255, name: "Lenzen (Elbe)" },
+  { id: "198674", mgid: 3110907, name: "Lenzkirch-Ruhbühl" },
+  { id: "109450", mgid: 10945, name: "Leutkirch-Herlazhofen" },
+  { id: "105910", mgid: 10591, name: "Lichtenhain-Mittelndorf" },
+  { id: "193934", mgid: 3010583, name: "Lichtentanne" },
+  { id: "190480", mgid: 3010453, name: "Liebenburg-Othfresen" },
+  { id: "109400", mgid: 6510943, name: "Lindau-Bad Schachen" },
+  { id: "103930", mgid: 10393, name: "Lindenberg" },
+  { id: "109420", mgid: 6510946, name: "Lindenberg/Allgäu" },
+  { id: "190949", mgid: 3010428, name: "Lippstadt-Bökenförde" },
+  { id: "100200", mgid: 10020, name: "List/Sylt" },
+  { id: "100160", mgid: 6510016, name: "List/Sylt-Ellenbogen" },
+  { id: "109220", mgid: 6510928, name: "Löffingen/Schwarzwald" },
+  { id: "192410", mgid: 3110548, name: "Löhnberg-Obershausen" },
+  { id: "103280", mgid: 6510328, name: "Löhne" },
+  { id: "194359", mgid: 3010755, name: "Lohr(Main)-Halsbach" },
+  { id: "190394", mgid: 3010321, name: "Löningen" },
+  { id: "109070", mgid: 6510908, name: "Lörrach" },
+  { id: "105760", mgid: 6510577, name: "Lößnitz-Reifen Oeser" },
+  { id: "190809", mgid: 3010376, name: "Lübben-Blumenfelde" },
+  { id: "102030", mgid: 6510203, name: "Lübbertsfehn" },
+  { id: "101560", mgid: 10157, name: "Lübeck" },
+  { id: "101590", mgid: 6510159, name: "Lübstorf" },
+  { id: "101670", mgid: 6510167, name: "Lübz" },
+  { id: "102530", mgid: 10253, name: "Lüchow" },
+  { id: "103761", mgid: 6510376, name: "Luckenwalde" },
+  { id: "101990", mgid: 6510199, name: "Luckow-Rieth" },
+  { id: "104180", mgid: 10418, name: "Lüdenscheid" },
+  { id: "190931", mgid: 3010416, name: "Lüdinghausen-Brochtrup" },
+  { id: "107141", mgid: 6510714, name: "Ludwigswinkel" },
+  { id: "104330", mgid: 10433, name: "Lügde-Paenbruch" },
+  { id: "106570", mgid: 6510657, name: "Lülsfeld" },
+  { id: "103610", mgid: 10361, name: "Magdeburg" },
+  { id: "106950", mgid: 6510695, name: "Mähring" },
+  { id: "109340", mgid: 6510939, name: "Mainau-Blumeninsel" },
+  { id: "191684", mgid: 3110635, name: "Mainz-Lerchenberg" },
+  { id: "196959", mgid: 3010959, name: "Maisach-Galgen" },
+  { id: "196149", mgid: 3010972, name: "Mallersdorf-Pfaffenberg" },
+  { id: "191569", mgid: 3010620, name: "Manderscheid" },
+  { id: "107290", mgid: 10729, name: "Mannheim" },
+  { id: "107300", mgid: 6510730, name: "Mannheim-Flugplatz" },
+  { id: "103960", mgid: 10396, name: "Manschnow" },
+  { id: "108020", mgid: 6510804, name: "March/Breisgau" },
+  { id: "105790", mgid: 10579, name: "Marienberg" },
+  { id: "105761", mgid: 6410576, name: "Marienberg-Kühnhaide" },
+  { id: "196099", mgid: 3010841, name: "Markt Erlbach-Mosbach" },
+  { id: "102640", mgid: 10264, name: "Marnitz" },
+  { id: "193264", mgid: 3110563, name: "Martinroda" },
+  { id: "105590", mgid: 6510559, name: "Masserberg" },
+  { id: "104951", mgid: 6510494, name: "Mattendorf" },
+  { id: "109380", mgid: 6510942, name: "Meckenbeuren" },
+  { id: "104290", mgid: 6510431, name: "Medebach" },
+  { id: "105802", mgid: 6510580, name: "Meerane" },
+  { id: "109330", mgid: 6510938, name: "Meersburg/Bodensee" },
+  { id: "193703", mgid: 3110457, name: "Mehringen" },
+  { id: "191091", mgid: 3110434, name: "Meinerzhagen-Redlendorf" },
+  { id: "105480", mgid: 10548, name: "Meiningen" },
+  { id: "190271", mgid: 3110941, name: "Memmingen" },
+  { id: "109470", mgid: 6510951, name: "Memmingen" },
+  { id: "190579", mgid: 3010277, name: "Menz" },
+  { id: "103041", mgid: 6510304, name: "Meppen" },
+  { id: "198499", mgid: 3010921, name: "Merklingen" },
+  { id: "108270", mgid: 10827, name: "Meßstetten" },
+  { id: "196949", mgid: 3110788, name: "Metten" },
+  { id: "103171", mgid: 6510316, name: "Mettingen-Schlickelde" },
+  { id: "198469", mgid: 3010923, name: "Metzingen" },
+  { id: "192899", mgid: 3010661, name: "Michelstadt" },
+  { id: "106480", mgid: 10648, name: "Michelstadt-Vielbrunn/Odenwald" },
+  { id: "190319", mgid: 3010146, name: "Mittelnkirchen-Hohenfelde" },
+  { id: "197930", mgid: 3110942, name: "Mittenwald-Buckelwiesen" },
+  { id: "194919", mgid: 3010774, name: "Möhrendorf-Kleinseebach" },
+  { id: "191088", mgid: 3010407, name: "Mönchengladbach" },
+  { id: "104030", mgid: 10403, name: "Mönchengladbach-Flughafen" },
+  { id: "191397", mgid: 3010522, name: "Montabaur" },
+  { id: "193049", mgid: 3010560, name: "Moorgrund-Gräfendorf-Nitzendorf" },
+  { id: "105730", mgid: 6510573, name: "Morgenröthe-Rautenkranz" },
+  { id: "190469", mgid: 3010443, name: "Moringen-Lutterbeck" },
+  { id: "104670", mgid: 6510467, name: "Mücheln (Geiseltal)" },
+  { id: "107360", mgid: 10736, name: "Mühlacker" },
+  { id: "108750", mgid: 10875, name: "Mühldorf am Inn" },
+  { id: "192989", mgid: 3010466, name: "Mühlhausen-Görmar" },
+  { id: "198709", mgid: 3110804, name: "Müllheim" },
+  { id: "108090", mgid: 6510817, name: "Mummelsee" },
+  { id: "190729", mgid: 3010395, name: "Müncheberg" },
+  { id: "108700", mgid: 10870, name: "München-Flughafen" },
+  { id: "108650", mgid: 10865, name: "München-Neuhausen" },
+  { id: "108612", mgid: 6310862, name: "München-ÖBZ" },
+  { id: "198549", mgid: 3010912, name: "Münsingen-Apfelstetten" },
+  { id: "103150", mgid: 10315, name: "Münster/Osnabrück" },
+  { id: "103130", mgid: 6510313, name: "Münster/Westfalen" },
+  { id: "102690", mgid: 6510269, name: "Müritz-Nationalpark" },
+  { id: "107780", mgid: 6510778, name: "Nabburg-Reifen Köppl" },
+  { id: "191509", mgid: 3010628, name: "Nastätten" },
+  { id: "103730", mgid: 6510373, name: "Nauen-Neukammer" },
+  { id: "109570", mgid: 6510960, name: "Nebelhorn" },
+  { id: "105250", mgid: 6510526, name: "Netphen-Bell Oil Tankstelle" },
+  { id: "105300", mgid: 6510530, name: "Neu-Anspach-Reifen Löhr" },
+  { id: "105370", mgid: 10537, name: "Neu-Ulrichstein" },
+  { id: "198389", mgid: 3010916, name: "Neubulach-Oberhaugstett" },
+  { id: "195149", mgid: 3010845, name: "Neuburg an der Kammel-Langenhaslach" },
+  { id: "108530", mgid: 10853, name: "Neuburg/Donau" },
+  { id: "109000", mgid: 6510901, name: "Neuenburg am Rhein" },
+  { id: "104200", mgid: 6510425, name: "Neuenrade" },
+  { id: "101170", mgid: 6510117, name: "Neuharlingersiel" },
+  { id: "105570", mgid: 10557, name: "Neuhaus am Rennweg" },
+  { id: "109231", mgid: 6410923, name: "Neuhausen ob Eck Flugplatz" },
+  { id: "106460", mgid: 10646, name: "Neuhütten/Spessart" },
+  { id: "192309", mgid: 3010541, name: "Neukirchen-Hauptschwenda" },
+  { id: "191129", mgid: 3010514, name: "Neunkirchen-Seelscheid-Krawinkel" },
+  { id: "191272", mgid: 3010727, name: "Neunkirchen-Wellesweiler" },
+  { id: "107110", mgid: 6510711, name: "Neunkirchen/Saar" },
+  { id: "102700", mgid: 10270, name: "Neuruppin" },
+  { id: "194934", mgid: 3110780, name: "Neustadt am Kulm-Filchendorf" },
+  { id: "104481", mgid: 6510453, name: "Neustadt/Harz" },
+  { id: "102780", mgid: 6510278, name: "Neustrelitz" },
+  { id: "106380", mgid: 6510638, name: "Nidderau" },
+  { id: "191109", mgid: 3010504, name: "Nideggen-Schmidt" },
+  { id: "107430", mgid: 10743, name: "Niederstetten" },
+  { id: "191699", mgid: 3010639, name: "Niederwörresbach" },
+  { id: "101130", mgid: 10113, name: "Norderney" },
+  { id: "104210", mgid: 6510426, name: "Nordhelle" },
+  { id: "101360", mgid: 10136, name: "Nordholz" },
+  { id: "103100", mgid: 6510310, name: "Nordhorn-Schulzentrum Deegfeld" },
+  { id: "105020", mgid: 10502, name: "Nörvenich" },
+  { id: "193904", mgid: 3010484, name: "Nossen" },
+  { id: "198129", mgid: 3010825, name: "Notzingen" },
+  { id: "107630", mgid: 10763, name: "Nürnberg" },
+  { id: "195309", mgid: 3010864, name: "Nürnberg-Netzstall" },
+  { id: "197311", mgid: 3110953, name: "Oberhaching-Laufzorn" },
+  { id: "105500", mgid: 6510550, name: "Oberhof/Thüringer Wald" },
+  { id: "109430", mgid: 6510948, name: "Oberstaufen/Allgäu" },
+  { id: "109480", mgid: 10948, name: "Oberstdorf" },
+  { id: "109631", mgid: 6410963, name: "Oberstdorf Sprungschanze" },
+  { id: "109530", mgid: 6510957, name: "Oberstdorf-Birgsau" },
+  { id: "198229", mgid: 3110744, name: "Obersulm-Willsbach" },
+  { id: "195439", mgid: 3010880, name: "Oberviechtach" },
+  { id: "105840", mgid: 6510584, name: "Oberwiesenthal" },
+  { id: "105960", mgid: 6510596, name: "Oderwitz-Rodelbahn" },
+  { id: "105950", mgid: 6510595, name: "Oderwitz/Dorf" },
+  { id: "106410", mgid: 10641, name: "Offenbach" },
+  { id: "198449", mgid: 3010906, name: "Ohlsbach" },
+  { id: "107420", mgid: 10742, name: "Öhringen" },
+  { id: "193013", mgid: 3010558, name: "Olbersleben" },
+  { id: "191529", mgid: 3010617, name: "Olsdorf" },
+  { id: "105070", mgid: 6510508, name: "Ormont-Raiffeisen" },
+  { id: "107020", mgid: 6510702, name: "Orscholz-Reifen Kiefer" },
+  { id: "104800", mgid: 10480, name: "Oschatz" },
+  { id: "103172", mgid: 6510317, name: "Osnabrück" },
+  { id: "190069", mgid: 3010039, name: "Ostenfeld (Rendsburg)" },
+  { id: "105650", mgid: 10565, name: "Osterfeld" },
+  { id: "102230", mgid: 6510223, name: "Osterholz-Scharmbeck" },
+  { id: "194007", mgid: 3010667, name: "Ostheim v.d. Rhön" },
+  { id: "102090", mgid: 6510209, name: "Ostrhauderfehn" },
+  { id: "101311", mgid: 6510131, name: "Otterndorf-Nordseebad" },
+  { id: "197599", mgid: 3010938, name: "Oy-Mittelberg-Petersthal" },
+  { id: "193589", mgid: 3010356, name: "Pabstorf" },
+  { id: "190101", mgid: 3010040, name: "Padenstedt" },
+  { id: "102070", mgid: 6510207, name: "Papenburg" },
+  { id: "101660", mgid: 6510166, name: "Parchim" },
+  { id: "195724", mgid: 3010875, name: "Parsberg-Eglwang" },
+  { id: "100190", mgid: 6510019, name: "Pellworm" },
+  { id: "101520", mgid: 10152, name: "Pelzerhaken" },
+  { id: "101950", mgid: 6510195, name: "Penkun/Vorpommern" },
+  { id: "107000", mgid: 6510700, name: "Perl-Nennig" },
+  { id: "191779", mgid: 3010602, name: "Perl-Nennig (II)" },
+  { id: "102630", mgid: 6510263, name: "Perleberg" },
+  { id: "108220", mgid: 6510831, name: "Pforzheim" },
+  { id: "198237", mgid: 3010812, name: "Pforzheim-Ispringen" },
+  { id: "198685", mgid: 3110832, name: "Pfullendorf" },
+  { id: "105451", mgid: 6510545, name: "Philippsthal/Werra" },
+  { id: "198055", mgid: 3110899, name: "Piding" },
+  { id: "191889", mgid: 3010817, name: "Pirmasens" },
+  { id: "105880", mgid: 6510588, name: "Pirna" },
+  { id: "105690", mgid: 10569, name: "Plauen" },
+  { id: "195323", mgid: 3010793, name: "Pommelsbrunn-Mittelburg" },
+  { id: "103230", mgid: 6510323, name: "Porta Westfalica" },
+  { id: "107670", mgid: 6510767, name: "Postbauer-Heng" },
+  { id: "103790", mgid: 10379, name: "Potsdam" },
+  { id: "103770", mgid: 6510377, name: "Potsdam-RBB" },
+  { id: "195919", mgid: 3110783, name: "Prackenbach-Neuhäusel" },
+  { id: "100930", mgid: 10093, name: "Putbus/Rügen" },
+  { id: "193701", mgid: 3110458, name: "Quedlinburg" },
+  { id: "193731", mgid: 3110463, name: "Querfurt-Mühle Lodersleben" },
+  { id: "101460", mgid: 10146, name: "Quickborn" },
+  { id: "109260", mgid: 6510932, name: "Radolfzell-Mettnau" },
+  { id: "190909", mgid: 3010325, name: "Rahden-Varl" },
+  { id: "106140", mgid: 10614, name: "Ramstein" },
+  { id: "105901", mgid: 6510591, name: "Rathen-Kurort" },
+  { id: "102860", mgid: 6510286, name: "Rattey-Schloss" },
+  { id: "107760", mgid: 10776, name: "Regensburg-Nord" },
+  { id: "105801", mgid: 6510579, name: "Reichenbach/Vogtland" },
+  { id: "191059", mgid: 3010424, name: "Reichshof-Eckenhagen" },
+  { id: "196005", mgid: 3010851, name: "Reimlingen" },
+  { id: "105803", mgid: 6510582, name: "Reinsdorf/Sachsen" },
+  { id: "197959", mgid: 3110959, name: "Reit im Winkl" },
+  { id: "191079", mgid: 3110425, name: "Remscheid-Lennep" },
+  { id: "198409", mgid: 3110740, name: "Renningen-Ihinger Hof" },
+  { id: "198349", mgid: 3010807, name: "Rheinau-Memprechtshofen" },
+  { id: "103060", mgid: 10306, name: "Rheine-Bentlage" },
+  { id: "198729", mgid: 3110915, name: "Rheinfelden" },
+  { id: "107310", mgid: 10731, name: "Rheinstetten" },
+  { id: "101790", mgid: 6510179, name: "Ribnitz-Damgarten" },
+  { id: "104810", mgid: 6510481, name: "Riesa" },
+  { id: "103950", mgid: 6510395, name: "Rietz-Neuendorf" },
+  { id: "103300", mgid: 6510330, name: "Rinteln" },
+  { id: "104830", mgid: 6510483, name: "Rochlitz" },
+  { id: "193291", mgid: 3110562, name: "Rockendorf" },
+  { id: "195345", mgid: 3110647, name: "Röllbach" },
+  { id: "197421", mgid: 3110984, name: "Rosenheim" },
+  { id: "101710", mgid: 6510171, name: "Rostock" },
+  { id: "190374", mgid: 3010237, name: "Rotenburg (Wümme)" },
+  { id: "107650", mgid: 10765, name: "Roth-Fliegerhorst" },
+  { id: "109210", mgid: 6510927, name: "Rothaus-Brauerei" },
+  { id: "195119", mgid: 3010843, name: "Rothenburg ob der Tauber" },
+  { id: "108240", mgid: 6510834, name: "Rottenburg" },
+  { id: "198609", mgid: 3010901, name: "Rottweil II" },
+  { id: "105610", mgid: 6510561, name: "Rudolstadt" },
+  { id: "105490", mgid: 6510549, name: "Ruhla" },
+  { id: "192519", mgid: 3010658, name: "Runkel-Ennerich" },
+  { id: "191809", mgid: 3010644, name: "Ruppertsecken" },
+  { id: "107080", mgid: 10708, name: "Saarbrücken" },
+  { id: "191279", mgid: 3010809, name: "Saarbrücken-Burbach" },
+  { id: "198249", mgid: 3110737, name: "Sachsenheim" },
+  { id: "196279", mgid: 3010993, name: "Saldenburg-Entschenreuth" },
+  { id: "193999", mgid: 3010666, name: "Sandberg" },
+  { id: "105191", mgid: 6510519, name: "Sankt Augustin-Hochschule" },
+  { id: "192869", mgid: 3010660, name: "Schaafheim-Schlierbach" },
+  { id: "104410", mgid: 10441, name: "Schauenburg-Elgershausen" },
+  { id: "108080", mgid: 6510814, name: "Schauinsland-Bergstation" },
+  { id: "109421", mgid: 6510962, name: "Scheidegg/Allgäu" },
+  { id: "104500", mgid: 3010469, name: "Schierke/Harz" },
+  { id: "105040", mgid: 6510505, name: "Schleiden-Schöneseiffen" },
+  { id: "105640", mgid: 10564, name: "Schleiz" },
+  { id: "100350", mgid: 10035, name: "Schleswig" },
+  { id: "100370", mgid: 10037, name: "Schleswig-Jagel" },
+  { id: "100360", mgid: 6510036, name: "Schleswig-Schloss Gottorf" },
+  { id: "103220", mgid: 6510322, name: "Schloss Holte-Stukenbrock" },
+  { id: "192569", mgid: 3010548, name: "Schlüchtern-Herolz" },
+  { id: "193259", mgid: 3010663, name: "Schmalkalden" },
+  { id: "104280", mgid: 6510430, name: "Schmallenberg-Westernbödefeld" },
+  { id: "193289", mgid: 3010574, name: "Schmieritz-Weltwitz" },
+  { id: "105520", mgid: 10552, name: "Schmücke" },
+  { id: "191349", mgid: 3010508, name: "Schneifelforsthaus" },
+  { id: "108221", mgid: 6510832, name: "Schömberg/LK Calw" },
+  { id: "109090", mgid: 6510911, name: "Schönau im Schwarzwald" },
+  { id: "103850", mgid: 10385, name: "Schönefeld-Flughafen" },
+  { id: "194405", mgid: 3010767, name: "Schonungen-Mainberg" },
+  { id: "195849", mgid: 3010888, name: "Schorndorf-Knöbling" },
+  { id: "192429", mgid: 3010550, name: "Schotten" },
+  { id: "198309", mgid: 3010931, name: "Schwäbisch Gmünd-Weiler" },
+  { id: "107450", mgid: 6510745, name: "Schwäbisch Hall-Kochendörfer" },
+  { id: "195414", mgid: 3010872, name: "Schwandorf" },
+  { id: "193269", mgid: 3010562, name: "Schwarzburg" },
+  { id: "105700", mgid: 6510571, name: "Schwarzenberg/Erzgebirge" },
+  { id: "101620", mgid: 10162, name: "Schwerin" },
+  { id: "105890", mgid: 6510589, name: "Sebnitz" },
+  { id: "102610", mgid: 10261, name: "Seehausen" },
+  { id: "190479", mgid: 3010353, name: "Seesen" },
+  { id: "194292", mgid: 3110680, name: "Selb-Lauterbach/Oberfranken" },
+  { id: "104010", mgid: 6510403, name: "Selfkant" },
+  { id: "197459", mgid: 3110988, name: "Siegsdorf-Höll" },
+  { id: "198649", mgid: 3110831, name: "Sigmaringen-Laiz" },
+  { id: "197425", mgid: 3010935, name: "Sigmarszell-Zeisertsweiler" },
+  { id: "197179", mgid: 3010989, name: "Simbach/Inn" },
+  { id: "191615", mgid: 3010623, name: "Simmern-Wahlbach" },
+  { id: "198769", mgid: 3110930, name: "Singen" },
+  { id: "193889", mgid: 3010591, name: "Sohland/Spree" },
+  { id: "104150", mgid: 6510420, name: "Solingen-Krahenhöhe" },
+  { id: "102350", mgid: 10235, name: "Soltau" },
+  { id: "102351", mgid: 6510235, name: "Soltau-Wasserwerk" },
+  { id: "105580", mgid: 6510558, name: "Sonneberg-Neufang" },
+  { id: "109490", mgid: 6510952, name: "Sonthofen-Reifen Fastner" },
+  { id: "192229", mgid: 3010542, name: "Sontra" },
+  { id: "107200", mgid: 6510720, name: "Speyer" },
+  { id: "101190", mgid: 6510119, name: "Spiekeroog" },
+  { id: "109790", mgid: 6510979, name: "Spitzingsattel" },
+  { id: "109780", mgid: 6510978, name: "Spitzingsee" },
+  { id: "109980", mgid: 6510998, name: "St. Bartholomä (Königssee)" },
+  { id: "108130", mgid: 6510822, name: "St. Georgen im Schwarzwald" },
+  { id: "100280", mgid: 10028, name: "St. Peter-Ording" },
+  { id: "101430", mgid: 6510143, name: "Stade" },
+  { id: "103370", mgid: 6510337, name: "Stadthagen" },
+  { id: "104630", mgid: 6510463, name: "Staßfurt" },
+  { id: "190299", mgid: 3010136, name: "Steinau, Kr. Cuxhaven" },
+  { id: "190149", mgid: 3010180, name: "Steinhagen-Negast" },
+  { id: "193699", mgid: 3010470, name: "Stiege" },
+  { id: "108360", mgid: 10836, name: "Stötten" },
+  { id: "101820", mgid: 6510182, name: "Stralsund" },
+  { id: "107880", mgid: 10788, name: "Straubing" },
+  { id: "106290", mgid: 6510629, name: "Stromberg" },
+  { id: "107380", mgid: 10738, name: "Stuttgart-Flughafen" },
+  { id: "107390", mgid: 10739, name: "Stuttgart-Rot" },
+  { id: "102260", mgid: 6510226, name: "Syke" },
+  { id: "192509", mgid: 3010553, name: "Tann (Rhön)" },
+  { id: "100290", mgid: 6510029, name: "Tarp" },
+  { id: "193129", mgid: 3010572, name: "Tegkwitz" },
+  { id: "102870", mgid: 6510287, name: "Templin" },
+  { id: "101770", mgid: 3010177, name: "Teterow" },
+  { id: "194217", mgid: 3010683, name: "Teuschnitz" },
+  { id: "107060", mgid: 10706, name: "Tholey" },
+  { id: "101550", mgid: 6510155, name: "Timmendorfer Strand" },
+  { id: "194623", mgid: 3110793, name: "Tirschenreuth-Lodermühl" },
+  { id: "191009", mgid: 3010403, name: "Tönisvorst" },
+  { id: "104510", mgid: 6510451, name: "Torfhaus/Harz-Jugendherberge" },
+  { id: "104790", mgid: 6510479, name: "Torgau" },
+  { id: "101891", mgid: 6510189, name: "Trassenheide-Ostseebad" },
+  { id: "193939", mgid: 3010584, name: "Treuen" },
+  { id: "108120", mgid: 6510821, name: "Triberg" },
+  { id: "108110", mgid: 6510820, name: "Triberg-Kurhaus" },
+  { id: "190169", mgid: 3010181, name: "Tribsees" },
+  { id: "106090", mgid: 10609, name: "Trier" },
+  { id: "191653", mgid: 3110609, name: "Trier-Zewen" },
+  { id: "102810", mgid: 10281, name: "Trollenhagen" },
+  { id: "197422", mgid: 3110987, name: "Trostberg" },
+  { id: "109230", mgid: 6510929, name: "Tuttlingen" },
+  { id: "192089", mgid: 3010449, name: "Twistetal-Mühlhausen" },
+  { id: "109310", mgid: 6510935, name: "Überlingen/Bodensee" },
+  { id: "101930", mgid: 10193, name: "Ueckermünde" },
+  { id: "102480", mgid: 6510248, name: "Uelzen" },
+  { id: "190389", mgid: 3010246, name: "Uelzen II" },
+  { id: "193249", mgid: 3010569, name: "Uhlstädt-Kirchhasel-Niederkrossen" },
+  { id: "108400", mgid: 10840, name: "Ulm-Mähringen" },
+  { id: "103560", mgid: 10356, name: "Ummendorf" },
+  { id: "108613", mgid: 6510863, name: "Unterschleißheim" },
+  { id: "101910", mgid: 6510191, name: "Usedom-Stadt" },
+  { id: "193253", mgid: 3110569, name: "Veilsdorf" },
+  { id: "102270", mgid: 6510227, name: "Verden" },
+  { id: "109110", mgid: 6510914, name: "Villingen-Schwenningen/ Stadtwerke SVS" },
+  { id: "198629", mgid: 3010900, name: "Villingen-Schwenningen II" },
+  { id: "100980", mgid: 6510098, name: "Vilm/Insel" },
+  { id: "101421", mgid: 6410142, name: "Wacken" },
+  { id: "190029", mgid: 3010042, name: "Wagersrott" },
+  { id: "198169", mgid: 3010823, name: "Waghäusel-Kirrlach" },
+  { id: "191989", mgid: 3010440, name: "Wahlsburg-Lippoldsberg" },
+  { id: "107330", mgid: 10733, name: "Waibstadt" },
+  { id: "108210", mgid: 6510829, name: "Waldbronn" },
+  { id: "192619", mgid: 3010648, name: "Waldems-Reinborn" },
+  { id: "107161", mgid: 6510716, name: "Waldmohr" },
+  { id: "107820", mgid: 10782, name: "Waldmünchen" },
+  { id: "109150", mgid: 6510921, name: "Waldshut-Tiengen" },
+  { id: "109760", mgid: 6510976, name: "Wallberg" },
+  { id: "193141", mgid: 3110564, name: "Waltershausen" },
+  { id: "190992", mgid: 3010419, name: "Waltrop-Abdinghof" },
+  { id: "190289", mgid: 3010122, name: "Wangerland-Hooksiel" },
+  { id: "101200", mgid: 6510120, name: "Wangerooge" },
+  { id: "104350", mgid: 10435, name: "Warburg" },
+  { id: "102680", mgid: 10268, name: "Waren" },
+  { id: "101700", mgid: 10170, name: "Warnemünde" },
+  { id: "109700", mgid: 6510970, name: "Warngau-Schäfflerhof" },
+  { id: "105440", mgid: 10544, name: "Wasserkuppe" },
+  { id: "106880", mgid: 10688, name: "Weiden" },
+  { id: "195249", mgid: 3010859, name: "Weidenbach-Weiherschneidbach" },
+  { id: "104980", mgid: 6510498, name: "Weifa/Steinigtwolmsdorf" },
+  { id: "108630", mgid: 10863, name: "Weihenstephan-Duernast" },
+  { id: "109050", mgid: 6510905, name: "Weil am Rhein" },
+  { id: "191149", mgid: 3010503, name: "Weilerswist-Lommersum" },
+  { id: "105620", mgid: 6510562, name: "Weimar" },
+  { id: "193079", mgid: 3110560, name: "Weimar Schöndorf" },
+  { id: "107240", mgid: 10724, name: "Weinbiet" },
+  { id: "198689", mgid: 3110936, name: "Weingarten, Kr. Ravensburg" },
+  { id: "191239", mgid: 3010715, name: "Weiskirchen" },
+  { id: "107610", mgid: 10761, name: "Weißenburg-Emetzheim" },
+  { id: "190369", mgid: 3010254, name: "Wendisch Evern" },
+  { id: "104240", mgid: 10424, name: "Werl" },
+  { id: "104540", mgid: 10454, name: "Wernigerode" },
+  { id: "106470", mgid: 6510647, name: "Wertheim-Mainhafen" },
+  { id: "108501", mgid: 6310850, name: "Wertingen" },
+  { id: "100270", mgid: 6510027, name: "Westerhever" },
+  { id: "100180", mgid: 10018, name: "Westerland/Sylt" },
+  { id: "104460", mgid: 6510446, name: "Wetze/Northeim" },
+  { id: "197319", mgid: 3010967, name: "Wielenbach" },
+  { id: "106331", mgid: 6510635, name: "Wiesbaden" },
+  { id: "192729", mgid: 3010669, name: "Wiesbaden-Auringen" },
+  { id: "103680", mgid: 10368, name: "Wiesenburg" },
+  { id: "102040", mgid: 6510204, name: "Wiesmoor" },
+  { id: "101280", mgid: 6510127, name: "Wilhelmshaven" },
+  { id: "105240", mgid: 6510525, name: "Windeck-Rosbach" },
+  { id: "104191", mgid: 6510424, name: "Wipperfürth" },
+  { id: "101640", mgid: 6510164, name: "Wismar" },
+  { id: "104740", mgid: 10474, name: "Wittenberg" },
+  { id: "190102", mgid: 3110144, name: "Wittenborn" },
+  { id: "190387", mgid: 3010327, name: "Wittingen-Vorhop" },
+  { id: "101260", mgid: 10126, name: "Wittmund-Webershausen" },
+  { id: "102720", mgid: 3010273, name: "Wittstock-Rote Mühle" },
+  { id: "198509", mgid: 3010918, name: "Wolfach" },
+  { id: "103510", mgid: 6510351, name: "Wolfsburg-Autostadt" },
+  { id: "103520", mgid: 6510352, name: "Wolfsburg-Brackstedt" },
+  { id: "190458", mgid: 3010347, name: "Wolfsburg-Ehmen" },
+  { id: "191769", mgid: 3010738, name: "Worms II" },
+  { id: "190359", mgid: 3010223, name: "Worpswede-Hüttenbusch" },
+  { id: "107230", mgid: 6510723, name: "Wörth/Pfalz" },
+  { id: "106860", mgid: 10686, name: "Wunsiedel-Schönbrunn" },
+  { id: "103340", mgid: 10334, name: "Wunstorf" },
+  { id: "191021", mgid: 3110421, name: "Wuppertal-Buchenhofen" },
+  { id: "106550", mgid: 10655, name: "Würzburg" },
+  { id: "190689", mgid: 3010370, name: "Wusterwitz" },
+  { id: "198749", mgid: 3110920, name: "Wutöschingen-Ofteringen" },
+  { id: "102510", mgid: 6510251, name: "Zarrentin am Schaalsee" },
+  { id: "190649", mgid: 3010278, name: "Zehdenick" },
+  { id: "193749", mgid: 3010581, name: "Zeitz" },
+  { id: "101900", mgid: 6510190, name: "Zinnowitz" },
+  { id: "105820", mgid: 10582, name: "Zinnwald-Georgenfeld" },
+  { id: "105990", mgid: 6510599, name: "Zittau" },
+  { id: "104640", mgid: 6510464, name: "Zörbig-Mößlitz" },
+  { id: "109610", mgid: 10961, name: "Zugspitze" },
+  { id: "105220", mgid: 6510521, name: "Zülpich" },
+  { id: "105800", mgid: 6510578, name: "Zwickau" },
+  { id: "107960", mgid: 10796, name: "Zwiesel" }
+];
 
 /* ===============================
    Load stations
@@ -249,90 +1188,63 @@ async function loadStation() {
   const id = params.get("station");
   if (!id) return;
 
-  try {
-    // Request an Bright Sky mit DWD-Stations ID
-    const resp = await fetch(brightSkyUrl(id));
-    const json = await resp.json();
+  const station = METEOMEDIA_STATIONS.find(s => s.id === id);
+  if (!station) {
+    display_error("Diese Station ist nicht über WeatherPro verfügbar: " + id);
+    return;
+  }
+  const mgid = station.mgid;
+  const localName = station.name;
 
-    if (!json.weather || json.weather.length === 0) {
-      throw new Error("Keine Daten vom Bright Sky API erhalten");
+  try {
+    const json = await fetchWeatherProForecast(mgid);
+
+    if (!json.forecasts || json.forecasts.length === 0) {
+      throw new Error("Keine Daten von WeatherPro erhalten");
     }
 
-    const rows = json.weather;
+    // PT0S rows carry instantaneous values (temp, wind, dir, humidity).
+    // PT1H rows carry per-hour aggregates (gust, sunshine, precipitation).
+    // Both use `validFrom` as the alignment key.
+    const pt0s = new Map();
+    const pt1h = new Map();
+    let serverName = null;
+    for (const f of json.forecasts) {
+      if (f.meteoGroupStationName && !serverName) serverName = f.meteoGroupStationName;
+      if (f.validPeriod === "PT0S") pt0s.set(f.validFrom, f);
+      else if (f.validPeriod === "PT1H") pt1h.set(f.validFrom, f);
+    }
+
+    const sortedKeys = [...pt0s.keys()].sort();
+    const rows = sortedKeys.map(k => ({ pt0s: pt0s.get(k), pt1h: pt1h.get(k) }));
+
     parsed = {
-      times: rows.map(r => new Date(r.timestamp)),
-      temp: rows.map(r => r.temperature),
-      wind: rows.map(r => r.wind_speed),
-      gust: rows.map(r => r.wind_gust_speed),
-      sun: rows.map(r => r.sunshine),
-      rain: rows.map(r => r.precipitation),
-      windDirSampled: rows.map((r, i) => i % 2 === 0 ? r.wind_direction : null),
-      rh: rows.map(r => {
-        const T = r.temperature;
-        const Td = r.dew_point;
-        if (T == null || Td == null) return null;
-        const eT = 6.112 * Math.exp(17.67 * T / (T + 243.5));
-        const eTd = 6.112 * Math.exp(17.67 * Td / (Td + 243.5));
-        return Math.min(100, Math.max(0, (eTd / eT) * 100));
-      })
+      times: sortedKeys.map(k => new Date(k)),
+      temp: rows.map(r => r.pt0s?.airTemperatureInCelsius ?? null),
+      wind: rows.map(r => r.pt0s?.windSpeedInKilometerPerHour ?? null),
+      gust: rows.map(r => r.pt1h?.maxWindGustInKilometerPerHour ?? null),
+      sun:  rows.map(r => r.pt1h?.sunshineDurationInMinutes ?? null),
+      rain: rows.map(r => r.pt1h?.precipitationAmountInMillimeter ?? null),
+      rh:   rows.map(r => r.pt0s?.relativeHumidityInPercent ?? null),
+      windDirSampled: rows.map((r, i) =>
+        i % 2 === 0 ? (r.pt0s?.windDirectionInDegree ?? null) : null
+      )
     };
 
     renderAll(parsed);
 
-    // Display station name (optional: aus json.sources)
-    const stationName = json.sources?.[0]?.station_name || id;
     document.getElementById("stationName").textContent =
-      "Station: " + stationName;
+      "Station: " + (serverName || localName);
 
   } catch (err) {
-    display_error("Fehler beim Laden der Bright Sky Daten: " + err.message);
+    display_error("Fehler beim Laden der WeatherPro-Daten: " + err.message);
   }
 }
 
 async function loadStationList() {
-  let json;
-
-  try {
-    const resp = await fetch(brightSkySourcesUrl());
-    json = await resp.json();
-  } catch {
-    display_error("Bright Sky Stationsliste konnte nicht geladen werden.");
-    return;
-  }
-
-  if (!Array.isArray(json.sources)) {
-    display_error("Ungültige Antwort vom Bright Sky Sources Endpoint.");
-    return;
-  }
-
-  const map = new Map();
-  json.sources
-    .filter(s => s.observation_type === "forecast")
-    .forEach(s => {
-    const key =
-      s.wmo_station_id ??
-      s.dwd_station_id ??
-      s.id;
-
-    if (!key) return;
-
-    if (!map.has(key)) {
-      map.set(key, {
-        id: s.wmo_station_id || s.dwd_station_id || s.id,
-        name: s.station_name || `Station ${key}`
-      });
-    }
-  });
-
-  // Sort
-  allStations = [...map.values()].sort((a, b) =>
-    a.name.localeCompare(b.name, "de", { sensitivity: "base" })
-  );
-
-  if (!allStations.length) {
-    display_error("Keine Stationen aus Bright Sky Sources erhalten.");
-    return;
-  }
+  allStations = METEOMEDIA_STATIONS
+    .slice()
+    .sort((a, b) => a.name.localeCompare(b.name, "de", { sensitivity: "base" }));
 
   renderStationOptions(allStations);
 
@@ -678,8 +1590,7 @@ document.getElementById("stationSearch").addEventListener("input", e => {
 
   renderStationOptions(filtered);
 });
-loadStation();
-loadStationList();
+loadStationList().then(loadStation);
 setDarkmodeFromStorage();
 </script>
 
