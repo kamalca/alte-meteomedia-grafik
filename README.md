@@ -6,7 +6,7 @@ Diese WebApp soll die inzwischen nicht mehr verfügbare Ansicht von wetterstatio
 
 ## Nutzung
 
-Über diesen Link: https://meisterphilipp.github.io/alte-meteomedia-grafik/app.html - Alternativ kann die Datei app.html heruntergeladen und in einem Browser geöffnet werden.
+Über diesen Link: https://kamalca.github.io/alte-meteomedia-grafik/app.html - Alternativ kann die Datei app.html heruntergeladen und in einem Browser geöffnet werden.
 
 Nach auswahl der Station wird die ID an die URL angehängt, damit kann diese auch als Bookmark gespeichert werden.
 
